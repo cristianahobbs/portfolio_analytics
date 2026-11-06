@@ -1,0 +1,133 @@
+# Portfolio definition and analysis settings.
+# Every number the analytics depend on lives here, so the dashboard and the
+# tear sheet stay reproducible.
+
+name: Multi-Asset Model Portfolio
+base_currency: USD
+nav: 100_000_000          # portfolio value in base currency (used for $ risk, DV01, liquidity)
+start: "2007-06-01"       # BIL/HYG inception; covers the 2008 crisis
+end: null                 # null = today
+data_source: auto         # auto (live, fall back to synthetic) | live | synthetic
+trading_days: 252
+
+# Holdings. duration / spread_duration are in years (approximate, for DV01/CS01).
+# adv_usd / spread_bps are fallbacks when live volume data is unavailable.
+assets:
+  SPY: {name: US Equity,          asset_class: Equity,      group: Equity,       weight: 0.16, duration: 0.0,  spread_duration: 0.0, spread_bps: 0.3, adv_usd: 3.0e10}
+  # Single stocks: one large company per sector. Optional max_weight overrides the global cap.
+  # Caveat: these are survivors chosen today, so backtests carry hindsight bias.
+  AAPL: {name: Apple (Tech),            asset_class: Single Stocks, group: Equity, weight: 0.02, max_weight: 0.05, duration: 0.0, spread_duration: 0.0, spread_bps: 1.0, adv_usd: 1.0e10}
+  JPM:  {name: JPMorgan (Banks),        asset_class: Single Stocks, group: Equity, weight: 0.02, max_weight: 0.05, duration: 0.0, spread_duration: 0.0, spread_bps: 1.0, adv_usd: 2.0e9}
+  JNJ:  {name: Johnson & Johnson (Health), asset_class: Single Stocks, group: Equity, weight: 0.02, max_weight: 0.05, duration: 0.0, spread_duration: 0.0, spread_bps: 1.0, adv_usd: 1.2e9}
+  XOM:  {name: Exxon Mobil (Energy),    asset_class: Single Stocks, group: Equity, weight: 0.02, max_weight: 0.05, duration: 0.0, spread_duration: 0.0, spread_bps: 1.0, adv_usd: 2.0e9}
+  PG:   {name: Procter & Gamble (Staples), asset_class: Single Stocks, group: Equity, weight: 0.02, max_weight: 0.05, duration: 0.0, spread_duration: 0.0, spread_bps: 1.0, adv_usd: 1.2e9}
+  CAT:  {name: Caterpillar (Industrials), asset_class: Single Stocks, group: Equity, weight: 0.02, max_weight: 0.05, duration: 0.0, spread_duration: 0.0, spread_bps: 1.5, adv_usd: 1.0e9}
+  EFA: {name: Developed ex-US Eq, asset_class: Equity,      group: Equity,       weight: 0.10, duration: 0.0,  spread_duration: 0.0, spread_bps: 1.5, adv_usd: 1.5e9}
+  EEM: {name: Emerging Mkt Equity,asset_class: Equity,      group: Equity,       weight: 0.05, duration: 0.0,  spread_duration: 0.0, spread_bps: 2.5, adv_usd: 1.2e9}
+  IEF: {name: US Treasury 7-10y,  asset_class: Gov Bonds,   group: Fixed Income, weight: 0.15, duration: 7.5,  spread_duration: 0.0, spread_bps: 1.0, adv_usd: 8.0e8}
+  TLT: {name: US Treasury 20y+,   asset_class: Gov Bonds,   group: Fixed Income, weight: 0.10, duration: 16.5, spread_duration: 0.0, spread_bps: 1.0, adv_usd: 2.5e9}
+  LQD: {name: IG Corporate Credit,asset_class: Credit,      group: Fixed Income, weight: 0.10, duration: 8.4,  spread_duration: 8.2, spread_bps: 1.0, adv_usd: 1.5e9}
+  HYG: {name: HY Corporate Credit,asset_class: Credit,      group: Fixed Income, weight: 0.05, duration: 3.2,  spread_duration: 3.1, spread_bps: 1.5, adv_usd: 1.5e9}
+  GLD: {name: Gold,               asset_class: Commodities, group: Real Assets,  weight: 0.10, duration: 0.0,  spread_duration: 0.0, spread_bps: 0.5, adv_usd: 1.5e9}
+  DBC: {name: Broad Commodities,  asset_class: Commodities, group: Real Assets,  weight: 0.05, duration: 0.0,  spread_duration: 0.0, spread_bps: 5.0, adv_usd: 3.0e7}
+  BIL: {name: T-Bills (Cash),     asset_class: Cash,        group: Cash,         weight: 0.02, duration: 0.25, spread_duration: 0.0, spread_bps: 1.0, adv_usd: 5.0e8}
+
+cash_ticker: BIL          # also used as the risk-free rate series
+
+# Policy benchmark. Brinson attribution compares portfolio and benchmark by
+# `group`; each group has a proxy so groups the benchmark doesn't hold still
+# have a benchmark return.
+benchmark:
+  weights: {SPY: 0.60, AGG: 0.40}
+  groups:
+    Equity:       {weight: 0.60, proxy: SPY}
+    Fixed Income: {weight: 0.40, proxy: AGG}
+    Real Assets:  {weight: 0.00, proxy: DBC}
+    Cash:         {weight: 0.00, proxy: BIL}
+
+# Factor proxies (all tradable ETFs, so they come from the same data source).
+# A factor defined as [long, short] is a long-short return spread.
+factors:
+  Equity:    SPY
+  Rates:     IEF            # positive beta = long duration
+  Credit:    [HYG, IEF]     # credit spread factor
+  Inflation: [TIP, IEF]     # breakeven inflation factor
+  USD:       UUP
+  Commodity: DBC
+vix_ticker: ^VIX
+
+# Optimisation constraints
+constraints:
+  min_weight: 0.0
+  max_weight: 0.35
+  allow_short: false
+  max_gross: 1.0            # leverage limit (sum of |w|); >1 only meaningful with shorts
+  cash_min: 0.02
+  asset_class_ranges:
+    Equity:      [0.15, 0.60]
+    Single Stocks: [0.00, 0.20]
+    Gov Bonds:   [0.10, 0.50]
+    Credit:      [0.00, 0.30]
+    Commodities: [0.00, 0.20]
+    Cash:        [0.02, 0.20]
+
+# Expected returns for optimisation
+expected_returns:
+  method: black_litterman   # historical | shrunk | black_litterman
+  risk_aversion: 2.5
+  tau: 0.05
+  views:                    # Black-Litterman views (annual returns); confidence in (0, 1]
+    - {type: absolute, asset: SPY, return: 0.06, confidence: 0.5}
+    - {type: relative, long: EEM, short: EFA, return: 0.02, confidence: 0.3}
+    - {type: absolute, asset: GLD, return: 0.04, confidence: 0.25}
+
+# Walk-forward backtest
+backtest:
+  lookback_days: 756        # 3 years of history per allocation decision
+  rebalance: ME             # pandas offset: ME monthly, QE quarterly, YE annual
+  threshold: 0.0            # only trade when max |drift| exceeds this (0 = always rebalance)
+  cost_bps: 10              # one-way transaction cost, applied to turnover
+
+# Fees and real returns
+fees:
+  management_fee: 0.0075    # annual, accrued daily
+inflation_series: CPIAUCSL  # FRED CPI series for real returns
+
+# Risk settings
+risk:
+  var_confidence: 0.95
+  var_window: 500           # rolling window for VaR backtests
+  ewma_lambda: 0.94
+  vol_target: 0.08          # for the volatility-targeting overlay
+  max_leverage: 1.5
+
+# Risk limits: amber when utilisation >= amber_level of the limit
+limits:
+  amber_level: 0.8
+  var_1d_95: 0.012          # 1-day 95% VaR as fraction of NAV
+  es_1d_975: 0.020
+  max_drawdown: 0.20
+  max_position: 0.35
+  equity_beta: 0.70
+  tracking_error: 0.05
+  days_to_liquidate_90pct: 2
+
+# Liquidity
+liquidity:
+  participation_rate: 0.20  # max share of ADV we trade per day
+  stress_adv_haircut: 0.5   # ADV falls 50% in stress
+  stress_spread_mult: 3.0
+
+# FX view for a non-USD investor
+fx:
+  investor_currency: GBP
+  fx_ticker: GBPUSD=X       # USD per GBP
+  hedge_carry: 0.0          # annual interest differential earned/paid when hedging (r_GBP - r_USD)
+
+# Monte Carlo
+monte_carlo:
+  horizon_days: 252
+  n_paths: 5000
+  t_dof: 4
+  seed: 42
+  jump_intensity: 3.0       # expected crash days per year in the jump scenario
