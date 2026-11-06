@@ -6,7 +6,7 @@
 
 A portfolio risk and analytics toolkit in Python, built to answer the questions a portfolio manager asks: *How much risk am I taking relative to my benchmark, and where does it come from? What happens in a crisis? What would I change, and is it worth the trading cost?*
 
-It analyses a model portfolio of **10 ETFs and 6 single stocks** across equities, government bonds, credit, commodities and cash, against a 60/40 benchmark, using real market data from 2007 onwards. The results appear in a 16-tab interactive dashboard, an auto-generated investment thesis and a one-page tear sheet.
+It analyses a model portfolio of **10 ETFs and 9 single stocks** (including Tesla, Palantir and Alibaba) across equities, government bonds, credit, commodities and cash, against a 60/40 benchmark, using real market data from 2007 onwards. The results appear in a 16-tab interactive dashboard, an auto-generated investment thesis and a one-page tear sheet.
 
 > **Disclaimer.** This is a personal project for learning and exploration. Nothing here is investment advice.
 
@@ -18,12 +18,13 @@ It analyses a model portfolio of **10 ETFs and 6 single stocks** across equities
 
 *Snapshot from live data to 5 November 2026. The full version, generated from the numbers, is in [`docs/thesis.md`](docs/thesis.md).*
 
-- **Better risk-adjusted, slightly lower return.** 7.2% a year at 9.6% volatility (Sharpe 0.62) vs 7.6% at 11.8% for the 60/40 (Sharpe 0.56). The max drawdown was −28.9% vs −35.8%.
-- **Active risk is one big bet.** Ex-ante tracking error is 5.4%, and **78% of it comes from being underweight SPY**. The six single stocks together *reduce* tracking error slightly.
-- **Diversification thins out in stress.** Average correlation rises from 0.22 (calm) to 0.32 (high VIX), and HY credit's correlation with equities rises to 0.79.
-- **The normal distribution understates the tail by 39%** at 99% VaR. In backtests, only filtered historical simulation passes at 95%, and no method passes at 99%, so VaR is best read as a lower bound.
-- **The portfolio lost less than the 60/40 in 7 of 8 historical crises.** The worst replay is the GFC (−18.8% vs −29.4%).
-- **The optimiser's suggestion** (buy SPY, sell EFA) would cut tracking error from 5.4% to 3.9% for about 5 bps of trading cost. It does this mainly by moving closer to the benchmark.
+- **Better return and risk-adjusted return.** 8.3% a year at 10.0% volatility (Sharpe 0.71) vs 7.6% at 11.8% for the 60/40 (Sharpe 0.56). The max drawdown was −28.7% vs −35.8%. Part of the edge comes from Tesla and Palantir, which were picked with hindsight (see Caveats).
+- **Active risk is one big bet.** Ex-ante tracking error is 5.8%, and **69% of it comes from being underweight SPY**. The nine single stocks together *reduce* tracking error slightly.
+- **Small positions, outsized risk.** Tesla and Palantir are 2% of capital each but contribute about 7% of portfolio volatility each, 3.5× their weight. All nine stocks together are 18% of capital and 29% of risk.
+- **Diversification thins out in stress.** Average correlation rises from 0.21 (calm) to 0.33 (high VIX), and HY credit's correlation with equities rises to 0.79.
+- **The normal distribution understates the tail by 33%** at 99% VaR. In backtests, only filtered historical simulation passes at 95%, and no method passes at 99%, so VaR is best read as a lower bound.
+- **The portfolio lost less than the 60/40 in 7 of 8 historical crises.** The worst replay is the GFC (−18.5% vs −29.4%).
+- **The optimiser's suggestion** (buy SPY, sell EFA) would cut tracking error from 5.8% to 4.5% for about 5 bps of trading cost. It does this mainly by moving closer to the benchmark.
 
 ---
 
@@ -153,7 +154,7 @@ pip install -e ".[dev]"
 streamlit run app/dashboard.py    # dashboard at http://localhost:8501
 python -m pa.insights             # regenerate docs/thesis.md
 python -m pa.tearsheet            # one-page reports/tearsheet.html (print to PDF)
-pytest                            # 33 tests, offline
+pytest                            # 34 tests, offline
 ```
 
 Data downloads on first run and is cached in `data/cache/`. Offline, the code falls back to a synthetic two-regime market, and a banner says so.
@@ -199,7 +200,9 @@ tests/                    pytest suite
 
 ## Caveats
 
-- **Hindsight bias.** The six stocks (Apple, JPMorgan, J&J, Exxon, P&G, Caterpillar) were chosen in 2026, knowing they survived, so backtests that include them are optimistic.
+- **Hindsight bias.** The nine stocks (Apple, JPMorgan, J&J, Exxon, P&G, Caterpillar, Tesla, Palantir, Alibaba) were chosen in 2026, knowing how they turned out, so backtests that include them are optimistic.
+- **Proxy history.** Palantir (listed 2020), Tesla (2010) and Alibaba (2014) use proxy returns before they listed: Nasdaq-100 for Palantir and Tesla, China large-caps for Alibaba. The dashboard flags this.
+- **Anthropic and OpenAI** aren't publicly traded yet. Anthropic has filed to list on Nasdaq as ANT, and OpenAI has filed confidentially. Ready-made entries are commented out in the config for when they list.
 - ETF histories begin in 2007, which covers the GFC but nothing earlier.
 - Durations, spreads and factor proxies are approximations, fine for analysis but not for trading.
 - Optimised weights are sensitive to expected-return inputs; the Optimisation tab shows how much.

@@ -293,6 +293,24 @@ def test_trailing_returns_ytd():
     assert "1 year" not in tr.index   # not enough history
 
 
+def test_proxy_backfill_only_before_listing(cfg, market):
+    from pa.analysis import Analysis
+    from pa.data import MarketData
+
+    prices = market.prices.copy()
+    listing = pd.Timestamp("2015-06-01")
+    prices.loc[prices.index < listing, "PLTR"] = np.nan
+    a = Analysis(cfg, MarketData(prices, market.volumes, market.cpi, "synthetic"))
+    r = a.all_returns
+    first = prices["PLTR"].first_valid_index()
+    pre, post = r.index <= first, r.index > first
+    np.testing.assert_allclose(r.loc[pre, "PLTR"], r.loc[pre, "QQQ"])
+    own = prices["PLTR"].pct_change(fill_method=None).reindex(r.index)
+    np.testing.assert_allclose(r.loc[post, "PLTR"], own[post])
+    assert r.index[0] < listing                      # history is not truncated
+    assert a.backfilled.loc["PLTR", "Proxy"] == "QQQ"
+
+
 def test_thesis_builds_on_synthetic_data(cfg):
     from pa.analysis import Analysis
     from pa.insights import build_thesis, thesis_markdown

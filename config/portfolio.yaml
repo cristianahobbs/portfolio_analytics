@@ -13,9 +13,19 @@ trading_days: 252
 # Holdings. duration / spread_duration are in years (approximate, for DV01/CS01).
 # adv_usd / spread_bps are fallbacks when live volume data is unavailable.
 assets:
-  SPY: {name: US Equity,          asset_class: Equity,      group: Equity,       weight: 0.16, duration: 0.0,  spread_duration: 0.0, spread_bps: 0.3, adv_usd: 3.0e10}
-  # Single stocks: one large company per sector. Optional max_weight overrides the global cap.
+  SPY: {name: US Equity,          asset_class: Equity,      group: Equity,       weight: 0.10, duration: 0.0,  spread_duration: 0.0, spread_bps: 0.3, adv_usd: 3.0e10}
+  # Single stocks. Optional max_weight overrides the global cap.
   # Caveat: these are survivors chosen today, so backtests carry hindsight bias.
+  # `proxy` fills returns from before a stock listed (labelled as backfilled in the dashboard).
+  PLTR: {name: Palantir (Software/AI),  asset_class: Single Stocks, group: Equity, weight: 0.02, max_weight: 0.05, proxy: QQQ, duration: 0.0, spread_duration: 0.0, spread_bps: 2.0, adv_usd: 5.0e9}
+  TSLA: {name: Tesla (EVs/Autos),        asset_class: Single Stocks, group: Equity, weight: 0.02, max_weight: 0.05, proxy: QQQ, duration: 0.0, spread_duration: 0.0, spread_bps: 1.0, adv_usd: 2.5e10}
+  BABA: {name: Alibaba (China internet), asset_class: Single Stocks, group: Equity, weight: 0.02, max_weight: 0.05, proxy: FXI, duration: 0.0, spread_duration: 0.0, spread_bps: 2.0, adv_usd: 1.5e9}
+  # Anthropic filed to list on Nasdaq as ANT (S-1, Oct 2026) but is not trading yet.
+  # Once it lists, uncomment and take 2% from another holding so weights still sum to 1:
+  # ANT:  {name: Anthropic (AI),        asset_class: Single Stocks, group: Equity, weight: 0.02, max_weight: 0.05, proxy: QQQ, duration: 0.0, spread_duration: 0.0, spread_bps: 3.0, adv_usd: 2.0e9}
+  # OpenAI is still private (confidential draft S-1, June 2026; listing reportedly targeted for 2027).
+  # No ticker yet. When it lists, replace OPENAI with the real ticker:
+  # OPENAI: {name: OpenAI (AI),         asset_class: Single Stocks, group: Equity, weight: 0.02, max_weight: 0.05, proxy: QQQ, duration: 0.0, spread_duration: 0.0, spread_bps: 3.0, adv_usd: 2.0e9}
   AAPL: {name: Apple (Tech),            asset_class: Single Stocks, group: Equity, weight: 0.02, max_weight: 0.05, duration: 0.0, spread_duration: 0.0, spread_bps: 1.0, adv_usd: 1.0e10}
   JPM:  {name: JPMorgan (Banks),        asset_class: Single Stocks, group: Equity, weight: 0.02, max_weight: 0.05, duration: 0.0, spread_duration: 0.0, spread_bps: 1.0, adv_usd: 2.0e9}
   JNJ:  {name: Johnson & Johnson (Health), asset_class: Single Stocks, group: Equity, weight: 0.02, max_weight: 0.05, duration: 0.0, spread_duration: 0.0, spread_bps: 1.0, adv_usd: 1.2e9}

@@ -27,9 +27,29 @@ class Analysis:
     # --- return series ---------------------------------------------------
     @cached_property
     def all_returns(self) -> pd.DataFrame:
+        """Daily returns. A holding that listed after the start date takes its
+        proxy's returns before listing (see `backfilled`); its own returns are
+        used from the first full day of trading."""
         cols = [c for c in self.md.prices.columns if c not in (self.cfg["vix_ticker"],
                                                                self.cfg["fx"]["fx_ticker"])]
-        return self.md.returns(cols).dropna(subset=self.cfg.tickers)
+        r = self.md.returns(cols)
+        for t, proxy in self.cfg.proxies.items():
+            if t in r and proxy in r:
+                pre = r[t].isna() & (r.index <= self.md.prices[t].first_valid_index())
+                r.loc[pre, t] = r.loc[pre, proxy]
+        return r.dropna(subset=self.cfg.tickers)
+
+    @cached_property
+    def backfilled(self) -> pd.DataFrame:
+        """Holdings whose early history comes from a proxy, and until when."""
+        rows = {}
+        start = self.all_returns.index[0]
+        for t, proxy in self.cfg.proxies.items():
+            listed = self.md.prices[t].first_valid_index()
+            if listed is not None and listed > start:
+                rows[t] = {"Proxy": proxy, "Own data from": listed,
+                           "Share of history from proxy": float((self.all_returns.index <= listed).mean())}
+        return pd.DataFrame(rows).T
 
     @property
     def asset_returns(self) -> pd.DataFrame:

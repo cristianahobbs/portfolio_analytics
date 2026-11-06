@@ -207,6 +207,10 @@ st.title(cfg["name"])
 st.caption(f"{a.md.source.title()} data · {port.index[0]:%d %b %Y} – {port.index[-1]:%d %b %Y} · "
            f"Benchmark: " + ", ".join(f"{w:.0%} {t}" for t, w in cfg.benchmark_weights.items())
            + f" · rebalanced {cfg['backtest']['rebalance'].replace('ME', 'monthly')}")
+if len(a.backfilled):
+    st.caption("ℹ️ Listed after the start date, so earlier returns come from a proxy: " + "; ".join(
+        f"**{t}** uses {r['Proxy']} before {pd.Timestamp(r['Own data from']):%b %Y}"
+        for t, r in a.backfilled.iterrows()) + ". See Methodology.")
 
 TAB_NAMES = ["Thesis", "Overview", "Active risk", "Benchmark & attribution", "Risk", "Drawdowns",
              "Correlations & regimes", "Factors", "Optimisation", "Trade proposal", "Backtest",

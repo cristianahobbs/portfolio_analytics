@@ -73,6 +73,14 @@ class Config:
     def trading_days(self) -> int:
         return int(self.raw.get("trading_days", 252))
 
+    @property
+    def proxies(self) -> dict[str, str]:
+        """Holding -> proxy ticker used for returns before the holding listed."""
+        if "proxy" not in self._assets:
+            return {}
+        p = self._assets["proxy"].dropna()
+        return {t: v for t, v in p.items() if isinstance(v, str) and v}
+
     def factor_tickers(self) -> list[str]:
         out = []
         for v in self.raw["factors"].values():
@@ -83,6 +91,7 @@ class Config:
         """Every price series the analytics need (deduplicated, order-preserving)."""
         groups = self.raw["benchmark"]["groups"].values()
         extra = (list(self.benchmark_weights.index) + [g["proxy"] for g in groups]
+                 + list(self.proxies.values())
                  + self.factor_tickers() + [self.raw["vix_ticker"], self.raw["fx"]["fx_ticker"]])
         return list(dict.fromkeys(self.tickers + extra))
 

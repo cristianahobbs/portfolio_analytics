@@ -84,7 +84,7 @@ def build_thesis(a: Analysis, target_method: str = "max_sharpe") -> dict:
         f"Equity-type holdings are {cfg.weights[eq_cls].sum():.0%} of capital but "
         f"**{rc.loc[eq_cls[eq_cls].index, '% of risk'].sum():.0%} of volatility**; the equity factor alone "
         f"explains {fd.loc['Equity', '% of variance']:.0%} of portfolio variance. "
-        f"The six single stocks are {cfg.weights[stocks].sum():.0%} of capital and "
+        f"The {int(stocks.sum())} single stocks are {cfg.weights[stocks].sum():.0%} of capital and "
         f"{rc.loc[stocks[stocks].index, '% of risk'].sum():.0%} of risk. "
         f"**{worst_ratio}** carries the most risk per unit of weight ({rc.loc[worst_ratio, 'Risk / weight']:.1f}×), "
         f"while {_names(rc['Risk / weight'].drop(cfg.cash_ticker).nsmallest(2).index, 2)} "
