@@ -255,6 +255,55 @@ def test_brinson_effects_sum_to_active_return(cfg, market):
     assert res["portfolio_return"] == pytest.approx((1 + port).prod() - 1, rel=1e-10)
 
 
+# ---------------------------------------------------------------- active risk & trades
+def test_active_risk_contributions_sum_to_te():
+    cov = pd.DataFrame([[0.04, 0.01, 0.0], [0.01, 0.02, 0.0], [0.0, 0.0, 0.01]],
+                       index=list("abc"), columns=list("abc"))
+    wp = pd.Series({"a": 0.5, "b": 0.3, "c": 0.2})
+    wb = pd.Series({"a": 0.6, "b": 0.4})
+    res = risk.active_risk(wp, wb, cov)
+    act = (wp.reindex(cov.index).fillna(0) - wb.reindex(cov.index).fillna(0)).to_numpy()
+    assert res["tracking_error"] == pytest.approx(np.sqrt(act @ cov.to_numpy() @ act))
+    assert res["table"]["Contribution to TE"].sum() == pytest.approx(res["tracking_error"])
+    assert res["table"]["% of TE"].sum() == pytest.approx(1.0)
+
+
+def test_trade_proposal_costs_and_min_trade():
+    from pa import trades as T
+
+    idx = list("abc")
+    cov = pd.DataFrame(np.diag([0.04, 0.02, 1e-6]), index=idx, columns=idx)
+    cur = pd.Series({"a": 0.5, "b": 0.48, "c": 0.02})
+    tgt = pd.Series({"a": 0.4, "b": 0.581, "c": 0.019})   # c trade below threshold
+    res = T.trade_proposal(cur, tgt, cov, pd.Series({"a": 0.5, "b": 0.5}), nav=1e6, cost_bps=10,
+                           min_trade=0.0025, cash="c")
+    t = res["target"]
+    assert t.sum() == pytest.approx(1.0)
+    assert res["trades"].loc["a", "Trade ($)"] == pytest.approx(-100_000)
+    # costs: |trades| x 10 bps
+    assert res["summary"]["Total cost ($)"] == pytest.approx((t - cur).abs().sum() * 1e6 * 10 / 1e4)
+
+
+def test_trailing_returns_ytd():
+    idx = pd.bdate_range("2023-12-01", "2024-03-29")
+    r = pd.Series(0.001, index=idx)
+    tr = R.trailing_returns(r)
+    n_ytd = (idx.year == 2024).sum()
+    assert tr.loc["YTD"].iloc[0] == pytest.approx(1.001 ** n_ytd - 1)
+    assert "1 year" not in tr.index   # not enough history
+
+
+def test_thesis_builds_on_synthetic_data(cfg):
+    from pa.analysis import Analysis
+    from pa.insights import build_thesis, thesis_markdown
+
+    a = Analysis.load(cfg, "synthetic")
+    th = build_thesis(a)
+    md = thesis_markdown(th)
+    for section in ("Performance", "Active risk", "Stress", "What the model would change"):
+        assert f"**{section}.**" in md
+
+
 # ---------------------------------------------------------------- regimes
 def test_hmm_separates_calm_and_volatile_regimes():
     rng = np.random.default_rng(9)

@@ -13,7 +13,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+APP_DIR = Path(__file__).resolve().parent
+# works without `pip install -e .` (e.g. on Streamlit Community Cloud)
+sys.path[:0] = [str(APP_DIR), str(APP_DIR.parent / "src")]
 warnings.filterwarnings("ignore")
 
 from pa import attribution as A  # noqa: E402
@@ -29,7 +31,9 @@ from pa import optimise as O  # noqa: E402
 from pa import returns as R  # noqa: E402
 from pa import risk as RK  # noqa: E402
 from pa import stress as S  # noqa: E402
+from pa import trades as TR  # noqa: E402
 from pa import var_backtest as VB  # noqa: E402
+from pa.insights import build_thesis, thesis_markdown  # noqa: E402
 from pa.analysis import Analysis  # noqa: E402
 from pa.config import load_config  # noqa: E402
 from pa.data import load_market_data  # noqa: E402
@@ -69,6 +73,47 @@ def monte_carlo(weights_key, source, nav, model, horizon, n_paths, seed, t_dof, 
                       t_dof, jump_intensity, periods=a.periods)
     out = MC.summarise(sim, nav)
     return out["stats"], out["fan"], out["terminal"]
+
+
+@st.cache_resource(show_spinner="Writing the investment thesis…")
+def thesis(weights_key, source, nav):
+    return build_thesis(analysis(weights_key, source, nav))
+
+
+@st.cache_resource(show_spinner="Running cost sensitivity…")
+def cost_sens(weights_key, source, nav, method):
+    a = analysis(weights_key, source, nav)
+    return B.cost_sensitivity(a.cfg, a.asset_returns, B.optimised_strategy(a.cfg, method), rf=a.rf)
+
+
+@st.cache_resource(show_spinner=False)
+def slow(name: str, weights_key, source, nav, *args):
+    """Cache for slower per-portfolio calculations, so widget changes don't recompute them."""
+    a = analysis(weights_key, source, nav)
+    cfg, port, bench = a.cfg, a.portfolio, a.benchmark
+    if name == "sharpe_ci":
+        return R.sharpe_confidence_interval(port, a.rf, n_boot=500, periods=a.periods)
+    if name == "brinson":
+        return A.brinson(cfg, a.all_returns, a.bod_weights)
+    if name == "factor_decomp":
+        return F.factor_risk_decomposition(cfg, a.all_returns, port)
+    if name == "factor_decomp_active":
+        return F.factor_risk_decomposition(cfg, a.all_returns, (port - bench).rename("Active"))
+    if name == "factor_exposures":
+        return F.exposures(cfg, a.all_returns, port.rename("Portfolio"))
+    if name == "rolling_betas":
+        return F.rolling_betas(cfg, a.all_returns, port, 104)
+    if name == "frontier":
+        mu_method, = args
+        cons = O.Constraints.from_config(cfg)
+        mu = O.expected_returns(cfg, a.excess_returns.iloc[-756:], a.cov, mu_method)
+        return O.efficient_frontier(mu, a.cov, cons, 25)
+    if name == "hyp_stress":
+        return S.hypothetical_stress(cfg, a.all_returns, cfg.weights, nav, a.vix,
+                                     betas=a.asset_factor_exposures)
+    if name == "rebalance_cmp":
+        return B.rebalance_comparison(cfg, a.asset_returns, cfg.weights, a.rf)
+    raise ValueError(name)
 
 
 @st.cache_data(show_spinner="Fitting regime model…")
@@ -111,7 +156,7 @@ def fmt_summary(df: pd.DataFrame) -> pd.DataFrame:
 
 def show(df, pct=(), money=(), num=(), days=(), height="auto", **kw):
     fmt = {c: "{:.1%}" for c in pct if c in df}
-    fmt.update({c: "${:,.0f}" for c in money if c in df})
+    fmt.update({c: (lambda v: f"-${-v:,.0f}" if v < 0 else f"${v:,.0f}") for c in money if c in df})
     fmt.update({c: "{:.2f}" for c in num if c in df})
     fmt.update({c: "{:.1f}" for c in days if c in df})
     st.dataframe(df.style.format(fmt, na_rep="–"), height=height, width="stretch", **kw)
@@ -163,14 +208,40 @@ st.caption(f"{a.md.source.title()} data · {port.index[0]:%d %b %Y} – {port.in
            f"Benchmark: " + ", ".join(f"{w:.0%} {t}" for t, w in cfg.benchmark_weights.items())
            + f" · rebalanced {cfg['backtest']['rebalance'].replace('ME', 'monthly')}")
 
-tabs = st.tabs(["Overview", "Benchmark & attribution", "Risk", "Drawdowns", "Correlations & regimes",
-                "Factors", "Optimisation", "Backtest", "Stress tests", "Monte Carlo",
-                "Liquidity & limits", "FX", "Methodology"])
+TAB_NAMES = ["Thesis", "Overview", "Active risk", "Benchmark & attribution", "Risk", "Drawdowns",
+             "Correlations & regimes", "Factors", "Optimisation", "Trade proposal", "Backtest",
+             "Stress tests", "Monte Carlo", "Liquidity & limits", "FX", "Methodology"]
+tabs = dict(zip(TAB_NAMES, st.tabs(TAB_NAMES)))
+
+# =============================================================================
+# 0. Investment thesis
+# =============================================================================
+with tabs["Thesis"]:
+    th = thesis(weights_key, source, nav)
+    s0 = R.performance_summary(port, rf, bench, P)
+    c = st.columns(5)
+    kpi(c[0], "Annual return", f"{s0['Annual return']:.1%}", delta=f"{s0['Active return']:+.1%} vs benchmark")
+    kpi(c[1], "Sharpe", f"{s0['Sharpe']:.2f}")
+    kpi(c[2], "Ex-ante tracking error", f"{a.active['tracking_error']:.1%}")
+    kpi(c[3], "Beta to benchmark", f"{a.active['beta_to_benchmark']:.2f}")
+    kpi(c[4], "Worst crisis (replayed)", f"{S.historical_stress(a.asset_returns, cfg.weights, nav)[0]['Portfolio'].astype(float).min():.1%}")
+    left, right = st.columns([3, 2])
+    with left:
+        st.markdown(thesis_markdown(th, "###"))
+    with right:
+        st.subheader("Trailing returns")
+        tr = R.trailing_returns(pd.DataFrame({"Portfolio": port, "Benchmark": bench}), P)
+        tr["Active"] = tr["Portfolio"] - tr["Benchmark"]
+        show(tr, pct=tr.columns)
+        st.subheader("Where the active risk is")
+        tet = a.active["table"]["% of TE"].sort_values()
+        plot(bar_fig(tet[tet.abs() > 0.005], "Share of tracking error", signed=True, height=380))
+        st.caption("See the *Active risk* and *Trade proposal* tabs for details.")
 
 # =============================================================================
 # 1. Overview
 # =============================================================================
-with tabs[0]:
+with tabs["Overview"]:
     summ = R.performance_summary(port, rf, bench, P)
     c = st.columns(6)
     kpi(c[0], "Annual return", f"{summ['Annual return']:.1%}",
@@ -198,7 +269,7 @@ with tabs[0]:
         st.dataframe(fmt_summary(table), width="stretch", height=560)
     with right:
         st.subheader("Is the Sharpe ratio real?")
-        lo, hi = R.sharpe_confidence_interval(port, rf, n_boot=500, periods=P)
+        lo, hi = slow("sharpe_ci", weights_key, source, nav)
         st.markdown(f"**Sharpe {summ['Sharpe']:.2f}**, 95% bootstrap interval **[{lo:.2f}, {hi:.2f}]** "
                     "(stationary block bootstrap, which keeps volatility clustering).")
         st.markdown(f"Probabilistic Sharpe ratio: **{R.probabilistic_sharpe(port, 0, rf, P):.1%}** "
@@ -208,6 +279,10 @@ with tabs[0]:
                     f"({R.sharpe(bench, rf, P):.2f}): **{R.probabilistic_sharpe(port, R.sharpe(bench, rf, P), rf, P):.1%}**")
         st.caption("For the Deflated Sharpe Ratio, which corrects for testing several strategies, "
                    "see the Backtest tab.")
+        st.subheader("Trailing returns")
+        trr = R.trailing_returns(pd.DataFrame({"Portfolio": port, "Benchmark": bench}), P)
+        trr["Active"] = trr["Portfolio"] - trr["Benchmark"]
+        show(trr, pct=trr.columns)
         st.subheader("Calendar-year returns")
         cal = R.calendar_returns(pd.DataFrame({"Portfolio": port, "Benchmark": bench}))
         cal.index = cal.index.year
@@ -227,9 +302,149 @@ with tabs[0]:
                       yfmt=".1f", height=320))
 
 # =============================================================================
+# Active risk
+# =============================================================================
+with tabs["Active risk"]:
+    ar = a.active
+    at_ = ar["table"]
+    realised_te = (port - bench).iloc[-252:].std() * np.sqrt(P)
+    c = st.columns(5)
+    kpi(c[0], "Ex-ante tracking error", f"{ar['tracking_error']:.2%}",
+        help="sqrt(a'Σa), a = active weights; Ledoit-Wolf covariance, last 3 years")
+    kpi(c[1], "Realised TE (1 year)", f"{realised_te:.2%}")
+    kpi(c[2], "Beta to benchmark", f"{ar['beta_to_benchmark']:.2f}")
+    kpi(c[3], "Active share", f"{at_['Active weight'].abs().sum() / 2:.0%}",
+        help="Half the sum of |active weights|: how different the holdings are from the benchmark")
+    kpi(c[4], "Alpha needed for IR 0.5", f"{0.5 * ar['tracking_error']:.2%} a year",
+        help="An information ratio of 0.5 is good. This is the outperformance the active risk has to earn")
+    st.markdown("Tracking error measures how far the portfolio can drift from the benchmark. "
+                "Each position's **contribution** = active weight × its marginal effect on TE, so the "
+                "contributions add up to the total. A position can matter more than its active weight "
+                "suggests if it is volatile, or less if it hedges other bets.")
+
+    srt = at_.sort_values("% of TE", ascending=False)
+    plot(grouped_bar(srt[["Active weight", "% of TE"]].rename(columns={"% of TE": "Share of TE"}),
+                     "Active weight vs share of tracking error", height=400,
+                     colors={"Active weight": SERIES[0], "Share of TE": SERIES[1]}))
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        big = (at_["Active weight"].abs() > 0.04) | (at_["% of TE"].abs() > 0.04)
+        fig = go.Figure(go.Scatter(
+            x=at_["Active weight"], y=at_["% of TE"], mode="markers+text",
+            text=[t if b else "" for t, b in zip(at_.index, big)], customdata=at_.index,
+            textposition="top center", marker=dict(size=11, color=SERIES[0], line=dict(width=2, color="white")),
+            hovertemplate="%{customdata}: active %{x:+.1%}, %{y:.1%} of TE<extra></extra>"))
+        fig.add_vline(x=0, line=dict(color="#898781", width=1))
+        fig.update_layout(height=420, hovermode="closest", title="Bets map: size of bet vs risk it adds",
+                          xaxis_title="Active weight", yaxis_title="Share of tracking error",
+                          xaxis_tickformat="+.0%", yaxis_tickformat=".0%")
+        plot(fig)
+    with c2:
+        show(ar["by_group"].sort_values("% of TE", ascending=False),
+             pct=["Active weight", "Contribution to TE", "% of TE"])
+        show(srt, pct=["Portfolio weight", "Benchmark weight", "Active weight", "Contribution to TE", "% of TE"],
+             height=380)
+        st.caption("Contribution to TE is in percentage points of tracking error; the column sums to the total.")
+
+    st.subheader("What drives the active risk: factors")
+    active_r = (port - bench).rename("Active")
+    fa = slow("factor_decomp_active", weights_key, source, nav)
+    c1, c2 = st.columns(2)
+    with c1:
+        plot(bar_fig(fa["% of variance"], "Share of active variance by factor", height=320))
+    with c2:
+        plot(bar_fig(fa["Beta"].dropna(), "Active factor betas (portfolio − benchmark)", fmt=".2f",
+                     signed=True, height=320))
+    st.caption("Weekly regression of portfolio-minus-benchmark returns on the factor proxies. A negative "
+               "equity beta here means the portfolio is structurally less exposed to equities than the benchmark.")
+
+    st.subheader("Ex-ante vs realised")
+    roll_te = pd.DataFrame({"Realised (63-day)": (port - bench).rolling(63).std() * np.sqrt(P),
+                            "Realised (1-year)": (port - bench).rolling(252).std() * np.sqrt(P)})
+    fig = line_fig(roll_te, "Rolling realised tracking error", height=320,
+                   colors={"Realised (63-day)": SERIES[0], "Realised (1-year)": SERIES[2]})
+    fig.add_hline(y=ar["tracking_error"], line=dict(color=SERIES[1], width=2, dash="dash"),
+                  annotation_text=f"Ex-ante today {ar['tracking_error']:.1%}")
+    plot(fig)
+
+    st.subheader("What if…")
+    c1, c2, c3 = st.columns(3)
+    w_asset = c1.selectbox("Change the weight of", cfg.tickers, key="te_asset")
+    w_delta = c2.slider("By (% of NAV)", -15.0, 15.0, 5.0, 0.5, key="te_delta") / 100
+    w_fund = c3.selectbox("Funded from", ["pro-rata"] + cfg.tickers,
+                          index=1 + cfg.tickers.index(cfg.cash_ticker), key="te_fund")
+    new_w = RK.incremental_var(cfg.weights, a.cov_daily, w_asset, w_delta,
+                               None if w_fund == "pro-rata" else w_fund)["new_weights"]
+    new_ar = RK.active_risk(new_w, cfg.benchmark_weights, a.cov_union)
+    c = st.columns(3)
+    kpi(c[0], "Tracking error", f"{new_ar['tracking_error']:.2%}",
+        delta=f"{(new_ar['tracking_error'] - ar['tracking_error']) * 1e4:+.0f} bp", )
+    kpi(c[1], "Portfolio volatility", f"{new_ar['portfolio_vol']:.2%}",
+        delta=f"{(new_ar['portfolio_vol'] - ar['portfolio_vol']) * 1e4:+.0f} bp")
+    kpi(c[2], "Beta to benchmark", f"{new_ar['beta_to_benchmark']:.2f}",
+        delta=f"{new_ar['beta_to_benchmark'] - ar['beta_to_benchmark']:+.2f}")
+
+# =============================================================================
+# Trade proposal
+# =============================================================================
+with tabs["Trade proposal"]:
+    st.markdown("From the current portfolio to an optimised target: the trade list, the cost, and what "
+                "changes in risk. Targets use Black-Litterman returns and Ledoit-Wolf risk under the config "
+                "constraints.")
+    c1, c2, c3, c4 = st.columns(4)
+    tmethod = c1.selectbox("Target", ["max_sharpe", "min_vol", "risk_parity", "hrp"],
+                           format_func={"max_sharpe": "Maximum Sharpe", "min_vol": "Minimum volatility",
+                                        "risk_parity": "Risk parity", "hrp": "HRP"}.get)
+    move = c2.slider("Move this far towards target", 10, 100, 100, 10, format="%d%%") / 100
+    min_tr = c3.select_slider("Skip trades smaller than", [0.0, 0.0025, 0.005, 0.01],
+                              value=0.0025, format_func="{:.2%}".format)
+    tcost = c4.select_slider("Commission / impact (bps)", [0, 5, 10, 25], value=cfg["backtest"]["cost_bps"])
+    cons_t = O.Constraints.from_config(cfg)
+    mu_t = O.expected_returns(cfg, a.excess_returns.iloc[-756:], a.cov)
+    full_target = O.optimise(tmethod, mu_t, a.cov, cons_t, cfg.weights.to_numpy())
+    target = cfg.weights + move * (full_target - cfg.weights)
+    tp = TR.trade_proposal(cfg.weights, target, a.cov_union, cfg.benchmark_weights, nav, tcost,
+                           cfg.assets["spread_bps"], min_tr, cfg.cash_ticker, a.equity_betas, mu_t,
+                           cfg.assets["name"])
+    sm = tp["summary"]
+    c = st.columns(5)
+    kpi(c[0], "Trades", f"{sm['Number of trades']}")
+    kpi(c[1], "One-way turnover", f"{sm['One-way turnover']:.1%}")
+    kpi(c[2], "Estimated cost", f"${sm['Total cost ($)']:,.0f}", help="Commission/impact + half the bid-ask spread")
+    kpi(c[3], "Cost (bps of NAV)", f"{sm['Cost (bps of NAV)']:.1f}")
+    yrs = sm.get("Years to recover cost", np.inf)
+    kpi(c[4], "Payback (model forecasts)", "never" if not np.isfinite(yrs) else
+        f"{yrs * 12:.1f} months", help="Cost ÷ gain in expected excess return. Only as good as the forecasts")
+    viol = cons_t.violations(tp["target"])
+    if viol:
+        st.warning("Target breaches constraints: " + "; ".join(viol), icon="⚠️")
+
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        tt = tp["trades"]
+        show(tt, pct=["Current", "Target", "Trade"], money=["Trade ($)", "Est. cost ($)"], height=600)
+        st.download_button("Download trade list (CSV)", tt.to_csv().encode("utf-8"),
+                           file_name=f"trades_{tmethod}.csv", mime="text/csv")
+    with c2:
+        mt = tp["metrics"].copy()
+        money_rows = [r for r in mt.index if "($)" in r]
+        num_rows = ["Beta to benchmark", "Effective N", "Equity beta", "Exp. Sharpe"]
+        disp = mt.astype(object)
+        for r in mt.index:
+            f = ("${:,.0f}" if r in money_rows else "{:.2f}" if r in num_rows else "{:.2%}")
+            disp.loc[r] = [f.format(v) if r not in money_rows or k != "Change" else f"{v:+,.0f}"
+                           for k, v in mt.loc[r].items()]
+        st.dataframe(disp, width="stretch", height=420)
+    cmp_w = pd.DataFrame({"Current": cfg.weights, "Target": tp["target"]})
+    plot(grouped_bar(cmp_w, "Current vs target weights", height=380,
+                     colors={"Current": SERIES[0], "Target": SERIES[1]}))
+    st.caption("Optimised weights are sensitive to expected-return inputs (see Optimisation → sensitivity). "
+               "Moving part of the way is a common way to limit that risk and the cost.")
+
+# =============================================================================
 # 2. Benchmark & attribution
 # =============================================================================
-with tabs[1]:
+with tabs["Benchmark & attribution"]:
     act = R.active_stats(port, bench, P)
     c = st.columns(5)
     kpi(c[0], "Active return (ann.)", f"{act['Active return']:+.2%}")
@@ -249,7 +464,7 @@ with tabs[1]:
                       yfmt=".2f", height=300))
 
     st.subheader("Brinson-Fachler attribution")
-    br = A.brinson(cfg, a.all_returns, a.bod_weights)
+    br = slow("brinson", weights_key, source, nav)
     st.markdown(f"Cumulative portfolio **{br['portfolio_return']:.1%}** vs benchmark "
                 f"**{br['benchmark_return']:.1%}**, active **{br['active_return']:+.1%}**, split into "
                 "*allocation* (over- or underweighting groups), *selection* (what was held inside each "
@@ -281,7 +496,7 @@ with tabs[1]:
 # =============================================================================
 # 3. Risk
 # =============================================================================
-with tabs[2]:
+with tabs["Risk"]:
     win = st.select_slider("Estimation window", options=[250, 500, 750, 1250, len(port)], value=500,
                            format_func=lambda x: "Full history" if x == len(port) else f"{x} days")
     recent = port.iloc[-win:]
@@ -404,7 +619,7 @@ with tabs[2]:
 # =============================================================================
 # 4. Drawdowns
 # =============================================================================
-with tabs[3]:
+with tabs["Drawdowns"]:
     dd = pd.DataFrame({"portfolio": D.drawdown_series(port), "benchmark": D.drawdown_series(bench)})
     plot(line_fig(dd, "Drawdown from previous peak", height=380))
     c = st.columns(3)
@@ -422,7 +637,7 @@ with tabs[3]:
 # =============================================================================
 # 5. Correlations & regimes
 # =============================================================================
-with tabs[4]:
+with tabs["Correlations & regimes"]:
     freq = st.radio("Return frequency", ["Weekly", "Daily"], horizontal=True,
                     help="Weekly reduces the bias from markets closing at different times")
     rr = C.to_weekly(a.asset_returns) if freq == "Weekly" else a.asset_returns
@@ -464,12 +679,12 @@ with tabs[4]:
 # =============================================================================
 # 6. Factors
 # =============================================================================
-with tabs[5]:
+with tabs["Factors"]:
     st.markdown("Weekly regressions on tradable factor proxies: "
                 + ", ".join(f"**{k}** = {v if isinstance(v, str) else v[0] + ' − ' + v[1]}"
                             for k, v in cfg["factors"].items()))
-    fd = F.factor_risk_decomposition(cfg, a.all_returns, port)
-    fexp = F.exposures(cfg, a.all_returns, port.rename("Portfolio"))
+    fd = slow("factor_decomp", weights_key, source, nav)
+    fexp = slow("factor_exposures", weights_key, source, nav)
     c1, c2 = st.columns(2)
     with c1:
         plot(bar_fig(fd["Beta"].dropna(), "Portfolio factor betas", fmt=".2f", signed=True, height=340))
@@ -487,14 +702,14 @@ with tabs[5]:
                "and isn't explained by macro factors. Factor ETFs regress perfectly on themselves (R² = 1).")
 
     st.subheader("Rolling factor betas (2-year window)")
-    rb = F.rolling_betas(cfg, a.all_returns, port, 104)
+    rb = slow("rolling_betas", weights_key, source, nav)
     pick = st.multiselect("Factors", fnames, default=["Equity", "Rates", "Credit"])
     plot(line_fig(rb[pick], "", yfmt=".2f", height=360))
 
 # =============================================================================
 # 7. Optimisation
 # =============================================================================
-with tabs[6]:
+with tabs["Optimisation"]:
     cons = O.Constraints.from_config(cfg)
     win = a.excess_returns.iloc[-756:]
     mu_method = st.radio("Expected returns", ["black_litterman", "shrunk", "historical"], horizontal=True,
@@ -522,7 +737,7 @@ with tabs[6]:
                          colors={"Equilibrium (implied)": SERIES[0], "Posterior": SERIES[1]}))
 
     st.subheader("Efficient frontier (with constraints)")
-    ef = O.efficient_frontier(mu, a.cov, cons, 25)
+    ef = slow("frontier", weights_key, source, nav, mu_method)
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=ef["Volatility"], y=ef["Return"], mode="lines", name="Frontier",
                              line=dict(width=2, color=SERIES[0]),
@@ -562,63 +777,70 @@ with tabs[6]:
 # =============================================================================
 # 8. Backtest
 # =============================================================================
-with tabs[7]:
+with tabs["Backtest"]:
     bt = cfg["backtest"]
     c1, c2, c3 = st.columns(3)
     rb_ = c1.selectbox("Rebalance", ["ME", "QE"], format_func={"ME": "Monthly", "QE": "Quarterly"}.get)
     cost = c2.select_slider("Transaction cost (bps, one-way)", [0, 5, 10, 25, 50], value=bt["cost_bps"])
     lb = c3.select_slider("Lookback", [504, 756, 1260], value=bt["lookback_days"],
                           format_func=lambda x: f"{x // 252} years")
-    res = backtests(weights_key, source, nav, rb_, cost, lb)
-    st.caption("Walk-forward: at each rebalance date the optimiser sees only the trailing lookback "
-               "window (covariance and expected returns re-estimated), trades at that close, and pays "
-               "costs on turnover. No future data enters any decision (checked by a unit test).")
-    first = max(r.returns.index[0] for r in res.values())
-    bench_bt = bench[bench.index >= first]
-    perf = pd.DataFrame({k: R.cumulative(r.returns[r.returns.index >= first]) for k, r in res.items()})
-    perf["benchmark"] = R.cumulative(bench_bt)
-    plot(line_fig(perf, "Out-of-sample growth of $1 (after costs)", yfmt=".2f", height=420))
-    tbl = pd.DataFrame({k: r.summary(rf, bench_bt, P) for k, r in res.items()})
-    n_trials = len(res)
-    trial_sd = tbl.loc["Sharpe"].std()
-    tbl.loc["Deflated Sharpe (prob.)"] = [R.deflated_sharpe(r.returns, n_trials, trial_sd, rf, P)
-                                          for r in res.values()]
-    rows = ["Annual return", "Annual volatility", "Sharpe", "Deflated Sharpe (prob.)", "Sortino",
-            "Max drawdown", "Information ratio", "Tracking error", "Annual turnover", "Annual cost drag", "Trades"]
-    st.dataframe(fmt_summary(tbl.loc[rows]), width="stretch")
-    st.caption(f"Deflated Sharpe = probability that the true Sharpe is above the best Sharpe you would expect from "
-               f"{n_trials} strategies with no skill. Below ~95% means the result could be luck from choosing "
-               "the best of several backtests.")
+    if not st.session_state.get("bt_on"):
+        st.info("The walk-forward backtest re-optimises every strategy each month over ~19 years, which takes "
+                "about 30 seconds the first time (then it is cached).", icon="⏱️")
+        if st.button("Run walk-forward backtests", type="primary"):
+            st.session_state["bt_on"] = True
+            st.rerun()
+    else:
+        res = backtests(weights_key, source, nav, rb_, cost, lb)
+        st.caption("Walk-forward: at each rebalance date the optimiser sees only the trailing lookback "
+                   "window (covariance and expected returns re-estimated), trades at that close, and pays "
+                   "costs on turnover. No future data enters any decision (checked by a unit test).")
+        first = max(r.returns.index[0] for r in res.values())
+        bench_bt = bench[bench.index >= first]
+        perf = pd.DataFrame({k: R.cumulative(r.returns[r.returns.index >= first]) for k, r in res.items()})
+        perf["benchmark"] = R.cumulative(bench_bt)
+        plot(line_fig(perf, "Out-of-sample growth of $1 (after costs)", yfmt=".2f", height=420))
+        tbl = pd.DataFrame({k: r.summary(rf, bench_bt, P) for k, r in res.items()})
+        n_trials = len(res)
+        trial_sd = tbl.loc["Sharpe"].std()
+        tbl.loc["Deflated Sharpe (prob.)"] = [R.deflated_sharpe(r.returns, n_trials, trial_sd, rf, P)
+                                              for r in res.values()]
+        rows = ["Annual return", "Annual volatility", "Sharpe", "Deflated Sharpe (prob.)", "Sortino",
+                "Max drawdown", "Information ratio", "Tracking error", "Annual turnover", "Annual cost drag", "Trades"]
+        st.dataframe(fmt_summary(tbl.loc[rows]), width="stretch")
+        st.caption(f"Deflated Sharpe = probability that the true Sharpe is above the best Sharpe you would expect from "
+                   f"{n_trials} strategies with no skill. Below ~95% means the result could be luck from choosing "
+                   "the best of several backtests.")
 
-    pick = st.selectbox("Weights over time for", list(res.keys()), index=1)
-    wt = res[pick].weights.resample("ME").last()
-    fig = go.Figure()
-    for i, t in enumerate(wt.columns):
-        fig.add_trace(go.Scatter(x=wt.index, y=wt[t], name=t, stackgroup="one", mode="lines",
-                                 line=dict(width=0.5, color="white"),
-                                 fillcolor=SERIES[i % len(SERIES)],
-                                 hovertemplate=f"{t}: %{{y:.1%}}<extra></extra>"))
-    fig.update_layout(height=400, yaxis_tickformat=".0%", title=f"{pick}: allocation history")
-    plot(fig)
+        pick = st.selectbox("Weights over time for", list(res.keys()), index=1)
+        wt = res[pick].weights.resample("ME").last()
+        fig = go.Figure()
+        for i, t in enumerate(wt.columns):
+            fig.add_trace(go.Scatter(x=wt.index, y=wt[t], name=t, stackgroup="one", mode="lines",
+                                     line=dict(width=0.5, color="white"),
+                                     fillcolor=SERIES[i % len(SERIES)],
+                                     hovertemplate=f"{t}: %{{y:.1%}}<extra></extra>"))
+        fig.update_layout(height=400, yaxis_tickformat=".0%", title=f"{pick}: allocation history")
+        plot(fig)
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Is rebalancing worth the cost?")
-        rbc = B.rebalance_comparison(cfg, a.asset_returns, cfg.weights, rf)
-        show(rbc, pct=["Annual return", "Annual volatility", "Annual turnover", "Annual cost drag"],
-             num=["Sharpe"])
-        st.caption("A band rule trades only when a weight has drifted more than the band from its target, "
-                   "which cuts turnover with little change in risk.")
-    with c2:
-        st.subheader("Cost sensitivity")
-        cm = st.selectbox("Strategy", ["max_sharpe", "min_vol", "risk_parity", "hrp"], key="costm")
-        cs = B.cost_sensitivity(cfg, a.asset_returns, B.optimised_strategy(cfg, cm), rf=rf)
-        show(cs, pct=["Annual return", "Annual turnover", "Annual cost drag"], num=["Sharpe"])
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("Is rebalancing worth the cost?")
+            rbc = slow("rebalance_cmp", weights_key, source, nav)
+            show(rbc, pct=["Annual return", "Annual volatility", "Annual turnover", "Annual cost drag"],
+                 num=["Sharpe"])
+            st.caption("A band rule trades only when a weight has drifted more than the band from its target, "
+                       "which cuts turnover with little change in risk.")
+        with c2:
+            st.subheader("Cost sensitivity")
+            cm = st.selectbox("Strategy", ["max_sharpe", "min_vol", "risk_parity", "hrp"], key="costm")
+            cs = cost_sens(weights_key, source, nav, cm)
+            show(cs, pct=["Annual return", "Annual turnover", "Annual cost drag"], num=["Sharpe"])
 
 # =============================================================================
 # 9. Stress tests
 # =============================================================================
-with tabs[8]:
+with tabs["Stress tests"]:
     st.subheader("Historical crises: today's weights replayed")
     hs, hc = S.historical_stress(a.asset_returns, cfg.weights, nav, bench)
     show(hs, pct=["Portfolio", "Worst point", "Benchmark"], money=["P&L ($)"])
@@ -628,8 +850,7 @@ with tabs[8]:
     plot(bar_fig(hc[sc].sort_values(), f"Contribution by holding: {sc}", signed=True, height=480))
 
     st.subheader("Hypothetical shocks")
-    hy, moves, per_asset = S.hypothetical_stress(cfg, a.all_returns, cfg.weights, nav, a.vix,
-                                                 betas=a.asset_factor_exposures)
+    hy, moves, per_asset = slow("hyp_stress", weights_key, source, nav)
     show(hy, pct=["Pure shock", "With correlated moves"], money=["P&L ($), correlated"])
     st.caption("**Pure**: only the named factor moves. **With correlated moves**: the other factors move "
                "as they typically did in stressed markets (VIX above its 80th percentile), given the shock. "
@@ -661,7 +882,7 @@ with tabs[8]:
 # =============================================================================
 # 10. Monte Carlo
 # =============================================================================
-with tabs[9]:
+with tabs["Monte Carlo"]:
     mc = cfg["monte_carlo"]
     c1, c2, c3 = st.columns(3)
     horizon = c1.select_slider("Horizon", [21, 63, 126, 252, 504], value=mc["horizon_days"],
@@ -712,7 +933,7 @@ with tabs[9]:
 # =============================================================================
 # 11. Liquidity & limits
 # =============================================================================
-with tabs[10]:
+with tabs["Liquidity & limits"]:
     st.subheader("Risk limits")
     lr = LIM.limit_report(cfg, a.current_limit_metrics())
     cols = st.columns(len(lr))
@@ -766,7 +987,7 @@ with tabs[10]:
 # =============================================================================
 # 12. FX
 # =============================================================================
-with tabs[11]:
+with tabs["FX"]:
     fxc = cfg["fx"]
     ccy = fxc["investor_currency"]
     st.markdown(f"The portfolio is in USD. For a **{ccy}-based investor**, returns also depend on "
@@ -788,5 +1009,5 @@ with tabs[11]:
 # =============================================================================
 # 13. Methodology
 # =============================================================================
-with tabs[12]:
+with tabs["Methodology"]:
     st.markdown((Path(__file__).resolve().parents[1] / "docs" / "methodology.md").read_text(encoding="utf-8"))

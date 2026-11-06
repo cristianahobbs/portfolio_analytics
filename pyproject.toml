@@ -8,12 +8,13 @@ version = "0.1.0"
 description = "Multi-asset portfolio risk, performance and optimisation analytics"
 requires-python = ">=3.10"
 dependencies = [
-    "numpy", "pandas>=2.2", "scipy", "scikit-learn", "arch",
+    "numpy", "pandas>=2.2", "scipy", "arch",
     "yfinance", "pyyaml", "pyarrow", "plotly", "streamlit",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "scikit-learn"]          # sklearn only to cross-check Ledoit-Wolf
+screenshots = ["playwright"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

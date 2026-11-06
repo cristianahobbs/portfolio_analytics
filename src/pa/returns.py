@@ -142,7 +142,7 @@ def downside_beta(r: pd.Series, b: pd.Series) -> float:
 def capture_ratios(r: pd.Series, b: pd.Series, freq: str = "ME") -> tuple[float, float]:
     """Up/down capture on monthly returns: portfolio's average return in
     benchmark up (down) months divided by the benchmark's."""
-    m = pd.concat([r, b], axis=1).dropna().resample(freq).apply(lambda x: (1 + x).prod() - 1)
+    m = (1 + pd.concat([r, b], axis=1).dropna()).resample(freq).prod() - 1
     up, dn = m[m.iloc[:, 1] > 0], m[m.iloc[:, 1] < 0]
     upc = up.iloc[:, 0].mean() / up.iloc[:, 1].mean() if len(up) else np.nan
     dnc = dn.iloc[:, 0].mean() / dn.iloc[:, 1].mean() if len(dn) else np.nan
@@ -245,7 +245,33 @@ def performance_summary(r: pd.Series, rf=0.0, benchmark: pd.Series | None = None
 
 
 def calendar_returns(r: pd.Series | pd.DataFrame, freq: str = "YE"):
-    return r.resample(freq).apply(lambda x: (1 + x).prod() - 1)
+    return (1 + r).resample(freq).prod() - 1
+
+
+def trailing_returns(r: pd.DataFrame, periods: int = 252) -> pd.DataFrame:
+    """Factsheet-style table: MTD, QTD, YTD, 1y, then annualised 3y/5y/10y and
+    since inception. Horizons longer than the history are left out."""
+    if isinstance(r, pd.Series):
+        r = r.to_frame()
+    end = r.index[-1]
+    first = r.index[0]
+    out = {}
+
+    def total(block):
+        return (1 + block).prod() - 1
+
+    for label, freq in (("MTD", "M"), ("QTD", "Q"), ("YTD", "Y")):
+        out[label] = total(r[r.index.to_period(freq) == end.to_period(freq)])
+    for years in (1, 3, 5, 10):
+        start = end - pd.DateOffset(years=years)
+        if start < first:
+            continue
+        block = r[r.index > start]
+        label = "1 year" if years == 1 else f"{years} years (ann.)"
+        out[label] = total(block) if years == 1 else (1 + total(block)) ** (1 / years) - 1
+    n_years = (end - first).days / 365.25
+    out[f"Since {first:%b %Y} (ann.)"] = (1 + total(r)) ** (1 / n_years) - 1
+    return pd.DataFrame(out).T
 
 
 def rolling_metrics(r: pd.Series, window: int = 252, rf=0.0, benchmark: pd.Series | None = None,

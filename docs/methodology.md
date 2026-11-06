@@ -31,6 +31,22 @@
   - The vol-targeting overlay scales exposure by target ÷ EWMA forecast, capped by the leverage limit.
 - **DV01 / CS01.** Position × (spread) duration × 1bp. Durations are approximate config inputs; a production system would take them from holdings data.
 
+### Active risk
+- **Active weights:** a = portfolio weights − benchmark weights, over the union of both sets of holdings (so AGG appears with a negative active weight).
+- **Ex-ante tracking error:** √(aᵀΣa), with Ledoit-Wolf Σ over the last 3 years. Each holding's contribution is aᵢ(Σa)ᵢ / TE; these sum exactly to TE. A negative contribution means the position offsets other active bets.
+- **Active share:** ½ Σ|aᵢ|. **Beta to benchmark:** w_pᵀΣw_b / w_bᵀΣw_b.
+- **Factor view of active risk:** weekly regression of (portfolio − benchmark) returns on the factor proxies.
+- **"Alpha needed for IR 0.5":** 0.5 × TE, the outperformance needed for the active risk to earn a good information ratio.
+
+### Trade proposal
+- The target comes from the chosen optimiser. The *move* slider scales trades towards it, and trades below the minimum size are skipped, with cash absorbing the difference.
+- **Cost:** |trade| × (commission/impact bps + half the bid-ask spread).
+- **Before/after metrics:** parametric (normal) VaR/ES, so the two are comparable on the same covariance.
+- **Payback:** cost ÷ gain in expected excess return. It depends entirely on the return forecasts, which are the least reliable input.
+
+### Investment thesis
+`pa/insights.py` writes each paragraph from the current numbers: performance, active risk, risk drivers, diversification, tails, stress, liquidity, and what the optimiser would change. It updates when the data, holdings or config change. It describes model output and is not a recommendation.
+
 ### Correlations and regimes
 - **Calm vs stressed.** Stress means the *previous* period's VIX is above its 80th percentile, so the regime is known in advance.
 - **Two-state hidden Markov model** on portfolio returns, fitted by Baum-Welch.

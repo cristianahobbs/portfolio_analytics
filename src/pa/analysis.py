@@ -80,6 +80,26 @@ class Analysis:
         return self.cov / self.periods
 
     @cached_property
+    def cov_union(self) -> pd.DataFrame:
+        """Covariance over portfolio and benchmark holdings (e.g. adds AGG),
+        needed for active risk and tracking error."""
+        tickers = list(dict.fromkeys(self.cfg.tickers + list(self.cfg.benchmark_weights.index)))
+        return risk.ledoit_wolf_cov(self.all_returns[tickers].iloc[-756:], self.periods)
+
+    @cached_property
+    def group_union(self) -> pd.Series:
+        g = self.cfg.group.copy()
+        for name, spec in self.cfg["benchmark"]["groups"].items():
+            if spec["proxy"] not in g.index:
+                g[spec["proxy"]] = name
+        return g
+
+    @cached_property
+    def active(self) -> dict:
+        return risk.active_risk(self.cfg.weights, self.cfg.benchmark_weights, self.cov_union,
+                                self.group_union)
+
+    @cached_property
     def excess_returns(self) -> pd.DataFrame:
         return self.asset_returns.sub(self.rf, axis=0)
 

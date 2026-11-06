@@ -24,8 +24,11 @@ pio.templates["pa"] = go.layout.Template(layout=dict(
     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
     xaxis=dict(showgrid=False, linecolor=MUTED, ticks="outside", tickcolor=MUTED, zeroline=False),
     yaxis=dict(gridcolor=GRID, zeroline=True, zerolinecolor=MUTED, zerolinewidth=1),
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-    margin=dict(l=10, r=10, t=40, b=10),
+    # title at the very top, legend in its own row underneath, so they never overlap
+    title=dict(x=0, xanchor="left", xref="paper", y=1, yanchor="top", yref="container",
+               pad=dict(t=6), font=dict(size=15)),
+    legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0, font=dict(size=12)),
+    margin=dict(l=10, r=10, t=72, b=10),
     hovermode="x unified",
     bargap=0.25,
 ))

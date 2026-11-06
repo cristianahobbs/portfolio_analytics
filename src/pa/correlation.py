@@ -10,7 +10,7 @@ def to_weekly(returns: pd.DataFrame) -> pd.DataFrame:
     """Compound to weekly. Weekly returns reduce the bias from markets that
     close at different times (e.g. Europe/Asia vs US), which pushes daily
     correlations towards zero."""
-    return returns.resample("W-FRI").apply(lambda x: (1 + x).prod() - 1)
+    return (1 + returns).resample("W-FRI").prod() - 1
 
 
 def rolling_correlation(returns: pd.DataFrame, reference: str, window: int = 126) -> pd.DataFrame:

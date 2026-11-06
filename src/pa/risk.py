@@ -98,7 +98,7 @@ def var_table(r: pd.Series, alphas=(0.95, 0.99), horizon: int = 1, nav: float | 
         rows[("Normal", a)] = (parametric_var(mu, sd, a), parametric_es(mu, sd, a))
         rows[("Student-t", a)] = (tv, te)
         rows[("Cornish-Fisher", a)] = (cornish_fisher_var(r, a), np.nan)
-    df = pd.DataFrame(rows, index=["VaR", "ES"]).T * np.sqrt(horizon)
+    df = pd.DataFrame(rows, index=["VaR", "ES"]).T.astype(float) * np.sqrt(horizon)
     df.index.names = ["Method", "Confidence"]
     if nav:
         df["VaR ($)"], df["ES ($)"] = df["VaR"] * nav, df["ES"] * nav
@@ -194,6 +194,40 @@ def incremental_var(weights: pd.Series, cov_daily: pd.DataFrame, asset: str, del
     v1 = z * np.sqrt(w1 @ s @ w1)
     return {"VaR before": float(v0), "VaR after": float(v1), "Incremental VaR": float(v1 - v0),
             "new_weights": w1}
+
+
+# --------------------------------------------------------------------------
+# Active risk (relative to the benchmark)
+# --------------------------------------------------------------------------
+def active_risk(w_port: pd.Series, w_bench: pd.Series, cov: pd.DataFrame,
+                groups: pd.Series | None = None) -> dict:
+    """Ex-ante tracking error and where it comes from.
+
+    Active weights a = w_port - w_bench over the union of holdings. TE is
+    sqrt(a' S a); each position's contribution a_i (S a)_i / TE sums to TE.
+    A position can add to TE even with a small active weight if it is
+    volatile or poorly correlated with the benchmark."""
+    idx = cov.index
+    wp = w_port.reindex(idx).fillna(0.0)
+    wb = w_bench.reindex(idx).fillna(0.0)
+    a = wp - wb
+    S = cov.to_numpy()
+    Sa = S @ a.to_numpy()
+    te = float(np.sqrt(a.to_numpy() @ Sa))
+    ctr = a.to_numpy() * Sa / te
+    table = pd.DataFrame({
+        "Portfolio weight": wp, "Benchmark weight": wb, "Active weight": a,
+        "Contribution to TE": ctr, "% of TE": ctr / te,
+    }, index=idx)
+    out = {"tracking_error": te, "table": table,
+           "beta_to_benchmark": float(wp @ cov @ wb / (wb @ cov @ wb)),
+           "portfolio_vol": float(np.sqrt(wp @ cov @ wp)),
+           "benchmark_vol": float(np.sqrt(wb @ cov @ wb))}
+    if groups is not None:
+        g = groups.reindex(idx).fillna("Benchmark only")
+        out["by_group"] = table.groupby(g.rename("Group"))[["Active weight", "Contribution to TE",
+                                                            "% of TE"]].sum()
+    return out
 
 
 # --------------------------------------------------------------------------
